@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#F3F2EE" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#11161C" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Vault">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob: data:; script-src 'self'; style-src 'self'; worker-src 'self' blob:; connect-src 'self'; font-src 'self' data: blob:; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Pocket Vault</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="styles.css">
+<script type="module" src="js/app.js"></script>
+</head>
+<body>
+
+<!-- ===== Loading ===== -->
+<section id="screen-loading" class="screen center-screen">
+  <p class="muted">Opening…</p>
+</section>
+
+<!-- ===== First run: create the vault ===== -->
+<section id="screen-setup" class="screen center-screen" hidden>
+  <div class="gate">
+    <div class="app-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><circle cx="12" cy="15.5" r="1.4"/></svg>
+    </div>
+    <h1>Pocket Vault</h1>
+    <p class="muted">Your documents, even with no signal. Everything stays on this device, encrypted.</p>
+    <form id="form-setup" class="stack" autocomplete="on">
+      <input class="visually-hidden" type="text" name="username" autocomplete="username" value="Pocket Vault" tabindex="-1" aria-hidden="true" readonly>
+      <label for="setup-pass">Choose a passphrase</label>
+      <input id="setup-pass" name="password" type="password" autocomplete="new-password" required minlength="8" placeholder="At least 8 characters">
+      <label for="setup-pass2">Type it again</label>
+      <input id="setup-pass2" name="password-confirm" type="password" autocomplete="new-password" required minlength="8">
+      <p class="hint">Tip: let Safari suggest a strong password and save it to the Passwords app. Then you never need to type it.</p>
+      <p class="error" id="setup-error" role="alert"></p>
+      <button class="btn primary" type="submit" id="setup-submit">Create my vault</button>
+    </form>
+    <button class="btn link" type="button" id="setup-restore">I have a backup file — restore it</button>
+  </div>
+</section>
+
+<!-- ===== Recovery code (shown once) ===== -->
+<section id="screen-recovery" class="screen center-screen" hidden>
+  <div class="gate">
+    <h1>Your recovery code</h1>
+    <p class="muted">If you ever lose the passphrase, this code opens the vault. It is shown <strong>only now</strong>. Print it or write it down and keep it with your important papers.</p>
+    <p class="recovery-code" id="recovery-code"></p>
+    <div class="row gap">
+      <button class="btn" type="button" id="recovery-copy">Copy</button>
+      <button class="btn" type="button" id="recovery-print">Print</button>
+    </div>
+    <label class="check"><input type="checkbox" id="recovery-ack"> I have saved this code somewhere safe</label>
+    <button class="btn primary" type="button" id="recovery-done" disabled>Continue</button>
+  </div>
+</section>
+
+<!-- ===== Unlock ===== -->
+<section id="screen-unlock" class="screen center-screen" hidden>
+  <div class="gate">
+    <div class="app-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><circle cx="12" cy="15.5" r="1.4"/></svg>
+    </div>
+    <h1>Pocket Vault</h1>
+    <form id="form-unlock" class="stack" autocomplete="on">
+      <input class="visually-hidden" type="text" name="username" autocomplete="username" value="Pocket Vault" tabindex="-1" aria-hidden="true" readonly>
+      <label for="unlock-pass">Passphrase</label>
+      <input id="unlock-pass" name="password" type="password" autocomplete="current-password" required>
+      <p class="error" id="unlock-error" role="alert"></p>
+      <button class="btn primary" type="submit" id="unlock-submit">Unlock</button>
+    </form>
+    <form id="form-recovery-unlock" class="stack" autocomplete="off" hidden>
+      <label for="unlock-recovery">Recovery code</label>
+      <input id="unlock-recovery" name="pv-recovery-code" type="text" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX" required>
+      <p class="error" id="recovery-unlock-error" role="alert"></p>
+      <button class="btn primary" type="submit" id="recovery-unlock-submit">Unlock with recovery code</button>
+    </form>
+    <button class="btn link" type="button" id="unlock-toggle">Forgot the passphrase? Use the recovery code</button>
+    <p class="pill"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg><span id="unlock-status">Encrypted on this device</span></p>
+  </div>
+</section>
+
+<!-- ===== Main app ===== -->
+<section id="screen-app" class="screen" hidden>
+  <div class="layout">
+    <div class="pane-list">
+      <header class="list-head">
+        <h1>Vault</h1>
+        <div class="row gap-s">
+          <button class="icon-btn" type="button" id="btn-settings" aria-label="Settings and backup">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+          </button>
+          <button class="icon-btn" type="button" id="btn-lock" aria-label="Lock now">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <div id="update-banner" class="banner" hidden>
+        <span id="update-text">A new version is ready.</span>
+        <div class="row gap-s">
+          <button class="btn small" type="button" id="update-backup">Back up first</button>
+          <button class="btn small primary" type="button" id="update-apply">Update</button>
+        </div>
+      </div>
+
+      <form class="search" id="form-search" role="search" autocomplete="off">
+        <label for="q" class="visually-hidden">Search your documents</label>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+        <input id="q" type="search" placeholder="Ask: passport, IFSC, Aadhaar…" enterkeyhint="search" autocapitalize="off" spellcheck="false">
+        <button class="icon-btn plain" type="button" id="btn-voice" aria-label="Search by voice">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+        </button>
+      </form>
+      <p class="voice-hint" id="voice-hint" hidden></p>
+
+      <div class="chips" id="chips" role="toolbar" aria-label="Filter by category"></div>
+
+      <div class="list" id="list" aria-live="polite"></div>
+
+      <button class="fab" type="button" id="btn-add" aria-label="Add a document">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+    </div>
+
+    <div class="pane-detail" id="detail" aria-live="polite"></div>
+  </div>
+  <div class="drop-overlay" id="drop-overlay" hidden>
+    <div><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3M7 8l5-5 5 5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg>
+    <p>Drop to add</p><p class="muted">Encrypted as it lands</p></div>
+  </div>
+</section>
+
+<!-- ===== Full-screen viewer ===== -->
+<section id="viewer" class="viewer" hidden aria-label="Document viewer">
+  <header class="viewer-head">
+    <button class="btn link strong" type="button" id="viewer-close">Done</button>
+    <span class="viewer-title" id="viewer-title"></span>
+    <button class="btn link" type="button" id="viewer-handover" aria-pressed="false">Hand over</button>
+  </header>
+  <div class="viewer-pages" id="viewer-pages"></div>
+  <p class="viewer-count" id="viewer-count"></p>
+  <div class="viewer-fields" id="viewer-fields"></div>
+</section>
+
+<!-- ===== Add / edit ===== -->
+<dialog id="dlg-edit" class="sheet" aria-labelledby="edit-heading">
+  <form id="form-edit" method="dialog" class="sheet-body">
+    <header class="sheet-head">
+      <button class="btn link" type="button" id="edit-cancel">Cancel</button>
+      <h2 id="edit-heading">New item</h2>
+      <button class="btn link strong" type="submit" id="edit-save">Save</button>
+    </header>
+
+    <div class="add-buttons">
+      <label class="tile">
+        <input type="file" id="file-pick" accept="image/*,application/pdf,.pdf,.heic,.heif" multiple class="visually-hidden">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        <span>Files or photos</span>
+      </label>
+      <label class="tile touch-only">
+        <input type="file" id="file-camera" accept="image/*" capture="environment" class="visually-hidden">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8a2 2 0 0 1 2-2h2l2-2h4l2 2h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="3.5"/></svg>
+        <span>Camera</span>
+      </label>
+      <div class="tile drop-tile desktop-only" id="drop-zone">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3M7 8l5-5 5 5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg>
+        <span>Or drag files here</span>
+      </div>
+    </div>
+    <div class="thumbs" id="edit-thumbs"></div>
+    <p class="hint" id="edit-progress" role="status"></p>
+
+    <label for="edit-title">Title</label>
+    <input id="edit-title" required placeholder="e.g. Passport">
+
+    <label for="edit-category">Category</label>
+    <select id="edit-category"></select>
+
+    <label for="edit-tags">Tags · words you might say to find it</label>
+    <input id="edit-tags" placeholder="passport, travel, ID" autocapitalize="off">
+
+    <fieldset class="fields">
+      <legend>Key details (optional)</legend>
+      <div id="edit-fields"></div>
+      <button class="btn link" type="button" id="edit-add-field">+ Add field</button>
+    </fieldset>
+
+    <label for="edit-notes">Notes</label>
+    <textarea id="edit-notes" rows="3"></textarea>
+
+    <label class="check"><input type="checkbox" id="edit-pinned"> Pin to the top</label>
+    <p class="error" id="edit-error" role="alert"></p>
+  </form>
+</dialog>
+
+<!-- ===== Settings ===== -->
+<dialog id="dlg-settings" class="sheet" aria-labelledby="settings-heading">
+  <div class="sheet-body">
+    <header class="sheet-head">
+      <span></span>
+      <h2 id="settings-heading">Settings</h2>
+      <button class="btn link strong" type="button" id="settings-close">Done</button>
+    </header>
+    <section class="card">
+      <h3>Backup</h3>
+      <p class="muted" id="settings-backup-info">Save one encrypted file to iCloud Drive or your Mac. It opens only with your passphrase or recovery code.</p>
+      <div class="row gap wrap">
+        <button class="btn primary" type="button" id="btn-export">Export backup</button>
+        <button class="btn" type="button" id="btn-restore">Restore from backup…</button>
+      </div>
+    </section>
+    <section class="card">
+      <h3>Passphrase</h3>
+      <form id="form-change-pass" class="stack" autocomplete="on">
+        <input class="visually-hidden" type="text" name="username" autocomplete="username" value="Pocket Vault" tabindex="-1" aria-hidden="true" readonly>
+        <label for="new-pass">New passphrase</label>
+        <input id="new-pass" type="password" autocomplete="new-password" minlength="8" required>
+        <label for="new-pass2">Type it again</label>
+        <input id="new-pass2" type="password" autocomplete="new-password" minlength="8" required>
+        <p class="error" id="change-pass-error" role="alert"></p>
+        <button class="btn" type="submit">Change passphrase</button>
+      </form>
+    </section>
+    <section class="card">
+      <h3>Recovery code</h3>
+      <p class="muted">Make a new code if the old one may have been seen. The old code stops working, and backups made before the change still need the old code.</p>
+      <button class="btn" type="button" id="btn-new-recovery">Make a new recovery code</button>
+    </section>
+    <section class="card">
+      <h3>About</h3>
+      <dl class="about" id="about"></dl>
+    </section>
+  </div>
+</dialog>
+
+<!-- ===== Generic prompt / confirm ===== -->
+<dialog id="dlg-ask" class="ask" aria-labelledby="ask-title">
+  <form id="form-ask" method="dialog" class="stack">
+    <h2 id="ask-title"></h2>
+    <p id="ask-text" class="muted"></p>
+    <input id="ask-input" type="password" autocomplete="off" hidden>
+    <p class="error" id="ask-error" role="alert"></p>
+    <div class="row gap end">
+      <button class="btn" type="button" id="ask-cancel">Cancel</button>
+      <button class="btn primary" type="submit" id="ask-ok">OK</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<input type="file" id="file-backup" accept=".json,application/json" class="visually-hidden">
+
+</body>
+</html>
