@@ -6,7 +6,7 @@
 // A new VERSION makes browsers fetch the new files; the app then shows
 // "Version X is ready" and switches only when you tap Update.
 
-const VERSION = '1.2.2';
+const VERSION = '1.2.3';
 const CACHE = `pocket-vault-${VERSION}`;
 const FILES = [
   './',

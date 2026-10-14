@@ -6,7 +6,7 @@ import * as share from './share.js';
 import { extractDetails } from './extract.js';
 import * as ocr from './ocr.js';
 
-export const APP_VERSION = '1.2.2';
+export const APP_VERSION = '1.2.3';
 const AUTO_LOCK_MS = 5 * 60 * 1000;   // lock after 5 minutes without a touch or key
 const HIDDEN_LOCK_MS = 60 * 1000;     // lock if the app was in the background over a minute
 const DAY = 86400000;
@@ -579,7 +579,9 @@ function updateReadButton() {
   const e = state.edit;
   const btn = $('edit-read');
   if (!e) { btn.hidden = true; return; }
-  const any = e.pending.length || (e.item.originals || []).length;
+  // Items added before 1.1.2 have no original files kept; their page images are read instead.
+  const pages = (e.item.pages || []).filter((p) => !e.removed.has(p.id)).length;
+  const any = e.pending.length || (e.item.originals || []).length || pages;
   btn.hidden = !any;
   btn.disabled = e.reading > 0;
 }
@@ -681,11 +683,23 @@ async function readStoredOriginals() {
     for (const p of e.pending) queueRead({ key: p.key, file: p.file, pending: p });
     return;
   }
+  let queued = 0;
   for (const o of e.item.originals || []) {
     if (!/pdf|image/i.test(o.type || '') && !/\.(pdf|jpe?g|png|heic|heif|webp)$/i.test(o.name)) continue;
     const bytes = await vault.getBlobBytes(o.id);
     const file = new File([bytes], o.name, { type: o.type || '' });
     queueRead({ key: 'orig-' + o.id, file, pending: null });
+    queued++;
+  }
+  if (queued) return;
+  // No original kept (items added before 1.1.2): read the stored page images.
+  const pages = (e.item.pages || []).filter((p) => !e.removed.has(p.id));
+  for (let i = 0; i < pages.length; i++) {
+    const p = pages[i];
+    const type = p.type || 'image/jpeg';
+    const bytes = await vault.getBlobBytes(p.id);
+    const file = new File([bytes], `page-${i + 1}.${/png/.test(type) ? 'png' : /webp/.test(type) ? 'webp' : 'jpg'}`, { type });
+    queueRead({ key: 'page-' + p.id, file, pending: null });
   }
 }
 
