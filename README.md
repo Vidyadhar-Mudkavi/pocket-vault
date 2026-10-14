@@ -16,6 +16,8 @@ anywhere; this repository holds only the app's code.
 | `js/search.js` | Forgiving search, built for dictated words ("show my passport", "aadhar") |
 | `js/media.js` | Turns added images and PDFs into page images for fast offline viewing |
 | `js/share.js` | Sharing: watermarked copies, PDF writer, encrypted share packages |
+| `js/ocr.js`, `js/extract.js` | Reads documents on the device and picks out key details |
+| `vendor/tesseract/` | tesseract.js 5.1.1 and English model (Apache 2.0), bundled for offline text reading |
 | `sw.js` | Service worker: keeps the app's own files offline; handles updates |
 | `vendor/pdfjs/` | Mozilla pdf.js 4.10.38 (Apache 2.0), bundled so PDFs work offline |
 

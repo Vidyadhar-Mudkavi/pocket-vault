@@ -75,14 +75,14 @@ export async function imageToPage(file) {
   return { bytes: await blob.arrayBuffer(), type: 'image/jpeg', width: canvas.width, height: canvas.height };
 }
 
-// askPassword(reasonText) -> Promise<string|null>; null cancels.
-// onProgress(done, total)
-// -> { pages: [{bytes,type,width,height}], totalPages, truncated }
-export async function pdfToPages(file, { askPassword, onProgress } = {}) {
+// Opens a PDF, asking for its password if needed.
+// -> { doc, password, lib }
+export async function openPdf(file, { askPassword, password } = {}) {
   const lib = await loadPdfJs();
   const data = new Uint8Array(await file.arrayBuffer());
-  const task = lib.getDocument({ data, isEvalSupported: false });
+  const task = lib.getDocument({ data, isEvalSupported: false, password: password || undefined });
   let cancelled = false;
+  let used = password || null;
   task.onPassword = async (updatePassword, reason) => {
     const wrong = reason === lib.PasswordResponses.INCORRECT_PASSWORD;
     const pw = askPassword
@@ -93,33 +93,98 @@ export async function pdfToPages(file, { askPassword, onProgress } = {}) {
       task.destroy();
       return;
     }
+    used = pw;
     updatePassword(pw);
   };
-  let doc;
   try {
-    doc = await task.promise;
-  } catch (err) {
+    const doc = await task.promise;
+    return { doc, password: used, lib };
+  } catch (_) {
     if (cancelled) throw new Error(`Skipped “${file.name}” (no password given).`);
     throw new Error(`Could not read “${file.name}” as a PDF.`);
   }
+}
+
+async function renderPdfPage(doc, i) {
+  const page = await doc.getPage(i);
+  const v1 = page.getViewport({ scale: 1 });
+  const scale = Math.min(3, MAX_EDGE / Math.max(v1.width, v1.height));
+  const viewport = page.getViewport({ scale });
+  const canvas = makeCanvas(viewport.width, viewport.height);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvasContext: ctx, viewport }).promise;
+  page.cleanup();
+  return canvas;
+}
+
+// askPassword(reasonText) -> Promise<string|null>; null cancels.
+// onProgress(done, total)
+// -> { pages: [{bytes,type,width,height}], totalPages, truncated, password }
+export async function pdfToPages(file, { askPassword, onProgress, password } = {}) {
+  const { doc, password: used } = await openPdf(file, { askPassword, password });
   const total = doc.numPages;
   const count = Math.min(total, MAX_PDF_PAGES);
   const pages = [];
   for (let i = 1; i <= count; i++) {
-    const page = await doc.getPage(i);
-    const v1 = page.getViewport({ scale: 1 });
-    const scale = Math.min(3, MAX_EDGE / Math.max(v1.width, v1.height));
-    const viewport = page.getViewport({ scale });
-    const canvas = makeCanvas(viewport.width, viewport.height);
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    await page.render({ canvasContext: ctx, viewport }).promise;
+    const canvas = await renderPdfPage(doc, i);
     const blob = await canvasToBlob(canvas);
     pages.push({ bytes: await blob.arrayBuffer(), type: 'image/jpeg', width: canvas.width, height: canvas.height });
-    page.cleanup();
     if (onProgress) onProgress(i, count);
   }
   await doc.destroy();
-  return { pages, totalPages: total, truncated: total > count };
+  return { pages, totalPages: total, truncated: total > count, password: used };
+}
+
+// ---------- for reading text ----------
+
+// Text already inside a PDF (first few pages), joined line by line.
+// -> { text, password, firstPage: canvas|null } ; firstPage only when the PDF has
+//    no usable text (a scan), so it can be read as a picture instead.
+export async function pdfTextOrImage(file, { askPassword, password, maxPages = 3 } = {}) {
+  const { doc, password: used } = await openPdf(file, { askPassword, password });
+  const lines = [];
+  const n = Math.min(doc.numPages, maxPages);
+  for (let i = 1; i <= n; i++) {
+    const page = await doc.getPage(i);
+    const content = await page.getTextContent();
+    let line = [];
+    let lastY = null;
+    for (const it of content.items) {
+      if (!('str' in it)) continue;
+      const y = Math.round(it.transform[5]);
+      if (lastY !== null && Math.abs(y - lastY) > 2 && line.length) {
+        lines.push(line.join(' ').replace(/\s+/g, ' ').trim());
+        line = [];
+      }
+      if (it.str.trim()) line.push(it.str);
+      lastY = y;
+      if (it.hasEOL && line.length) { lines.push(line.join(' ').replace(/\s+/g, ' ').trim()); line = []; lastY = null; }
+    }
+    if (line.length) lines.push(line.join(' ').replace(/\s+/g, ' ').trim());
+    page.cleanup();
+  }
+  const text = lines.filter(Boolean).join('\n');
+  let firstPage = null;
+  if (text.replace(/\s/g, '').length < 40) firstPage = await renderPdfPage(doc, 1);
+  await doc.destroy();
+  return { text, password: used, firstPage };
+}
+
+// A canvas suitable for text recognition (handles HEIC via Safari's decoder).
+export async function imageForOcr(file) {
+  const src = await decodeImage(file);
+  const w0 = src.width || src.naturalWidth;
+  const h0 = src.height || src.naturalHeight;
+  const long = Math.max(w0, h0);
+  const scale = long < 1400 ? 1400 / long : Math.min(1, 2600 / long);
+  const canvas = makeCanvas(w0 * scale, h0 * scale);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(src, 0, 0, canvas.width, canvas.height);
+  if (src.close) src.close();
+  return canvas;
 }

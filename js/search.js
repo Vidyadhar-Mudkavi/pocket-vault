@@ -82,6 +82,25 @@ function bestIn(q, tokens) {
   return best;
 }
 
+// Text read from a document is noisy, so it only counts on an exact word or a
+// word start — never on a near miss. Tokens are cached per item text.
+const bodyCache = new Map();
+function bodyTokens(item) {
+  if (!item.text) return new Set();
+  let entry = bodyCache.get(item.id);
+  if (!entry || entry.text !== item.text) {
+    entry = { text: item.text, tokens: new Set(tokenize(item.text).filter((t) => t.length >= 3)) };
+    bodyCache.set(item.id, entry);
+  }
+  return entry.tokens;
+}
+
+function bodyScore(q, tokens) {
+  if (tokens.has(q)) return 1;
+  if (q.length >= 4) for (const t of tokens) if (t.startsWith(q)) return 0.85;
+  return 0;
+}
+
 // Returns items with a score, best first. Empty query → all items.
 export function search(items, query) {
   const qs = queryTokens(query);
@@ -93,6 +112,7 @@ export function search(items, query) {
     const category = tokenize(item.category);
     const fields = (item.fields || []).flatMap((f) => [...tokenize(f.label), ...tokenize(f.value)]);
     const notes = tokenize(item.notes);
+    const body = bodyTokens(item);
     let total = 0;
     let matched = 0;
     for (const q of qs) {
@@ -101,7 +121,8 @@ export function search(items, query) {
         bestIn(q, tags) * 2.5,
         bestIn(q, category) * 1.5,
         bestIn(q, fields) * 1.2,
-        bestIn(q, notes) * 0.8
+        bestIn(q, notes) * 0.8,
+        body.size ? bodyScore(q, body) * 0.6 : 0
       );
       if (s > 0) matched++;
       total += s;

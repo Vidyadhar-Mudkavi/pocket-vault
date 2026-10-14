@@ -1,10 +1,12 @@
 // Pocket Vault — user interface.
 import * as vault from './vault.js';
 import { search } from './search.js';
-import { imageToPage, pdfToPages, isPdf, isImage, MAX_PDF_PAGES } from './media.js';
+import { imageToPage, pdfToPages, pdfTextOrImage, imageForOcr, isPdf, isImage, MAX_PDF_PAGES } from './media.js';
 import * as share from './share.js';
+import { extractDetails } from './extract.js';
+import * as ocr from './ocr.js';
 
-export const APP_VERSION = '1.1.3';
+export const APP_VERSION = '1.2.2';
 const AUTO_LOCK_MS = 5 * 60 * 1000;   // lock after 5 minutes without a touch or key
 const HIDDEN_LOCK_MS = 60 * 1000;     // lock if the app was in the background over a minute
 const DAY = 86400000;
@@ -368,6 +370,7 @@ function renderDetail() {
     ${(item.tags || []).length ? `<div class="tags">${item.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>` : ''}
     ${item.notes ? `<div class="notes">${esc(item.notes)}</div>` : ''}
     ${(item.originals || []).length ? `<div class="files"><p class="section-label">Original files</p>${item.originals.map((o, i) => `<button type="button" class="btn small" data-orig="${i}">Open ${esc(o.name)}</button>`).join('')}</div>` : ''}
+    ${item.text ? `<details class="read-text"><summary>Text read from the document</summary><pre>${esc(item.text)}</pre></details>` : ''}
     <p class="meta-line">Added ${esc(fmtDate(item.created))}${item.updated && item.updated !== item.created ? ` · updated ${esc(fmtDate(item.updated))}` : ''}</p>
     <div><button class="btn small danger" type="button" data-act="delete">Delete this item</button></div>
   </article>`;
@@ -491,9 +494,10 @@ async function openOriginal(o) {
 }
 
 // ---------- add / edit ----------
-function fieldRow(label = '', value = '') {
+function fieldRow(label = '', value = '', auto = false) {
   const row = document.createElement('div');
-  row.className = 'field-row';
+  row.className = 'field-row' + (auto ? ' auto' : '');
+  row.addEventListener('input', () => row.classList.remove('auto'));
   row.innerHTML = `<input aria-label="Field name" placeholder="Name, e.g. IFSC" value="${esc(label)}">
     <input aria-label="Field value" placeholder="Value" value="${esc(value)}" autocapitalize="off" autocomplete="off" spellcheck="false">
     <button type="button" class="icon-btn" aria-label="Remove this field">${I.x}</button>`;
@@ -522,7 +526,8 @@ function openEdit(item, initialFiles = []) {
   const base = item
     ? JSON.parse(JSON.stringify(item))
     : { id: vault.newId(), title: '', category: 'identity', tags: [], fields: [], notes: '', pinned: false, pages: [], originals: [] };
-  state.edit = { isNew, item: base, removed: new Set(), pending: [] };
+  state.edit = { isNew, item: base, removed: new Set(), pending: [], texts: new Map(), readChain: Promise.resolve(), reading: 0, titleAuto: isNew, categoryTouched: !isNew };
+  for (const id of ['edit-title', 'edit-category', 'edit-tags']) $(id).classList.remove('auto');
   $('edit-heading').textContent = isNew ? 'New item' : 'Edit item';
   $('edit-title').value = base.title;
   $('edit-category').innerHTML = CATEGORIES.map((c) => `<option value="${c.id}">${esc(c.label)}</option>`).join('');
@@ -535,6 +540,7 @@ function openEdit(item, initialFiles = []) {
   setFieldRows(isNew ? catOf(base.category).presets.map((l) => ({ label: l, value: '' })) : base.fields || []);
   $('edit-save').disabled = false;
   $('dlg-edit').showModal();
+  updateReadButton();
   if (initialFiles.length) addFiles(initialFiles);
   renderEditThumbs();
   if (!isTouch && !initialFiles.length) $('edit-title').focus();
@@ -544,6 +550,7 @@ function cleanupEdit() {
   if (!state.edit) return;
   for (const p of state.edit.pending) if (p.preview) URL.revokeObjectURL(p.preview);
   state.edit = null;
+  ocr.release();
 }
 
 function suggestTitle(name) {
@@ -558,10 +565,128 @@ function addFiles(fileList) {
     const p = { key: vault.newId(), file, preview: null };
     if (!isPdf(file)) p.preview = URL.createObjectURL(file);
     state.edit.pending.push(p);
-    if (!$('edit-title').value.trim()) $('edit-title').value = suggestTitle(file.name);
+    if (!$('edit-title').value.trim()) { $('edit-title').value = suggestTitle(file.name); state.edit.titleAuto = true; }
+    queueRead({ key: p.key, file, pending: p });
   }
   $('edit-error').textContent = rejected.length ? `Skipped (not an image or PDF): ${rejected.join(', ')}` : '';
   renderEditThumbs();
+  updateReadButton();
+}
+
+// ---------- reading details from documents ----------
+
+function updateReadButton() {
+  const e = state.edit;
+  const btn = $('edit-read');
+  if (!e) { btn.hidden = true; return; }
+  const any = e.pending.length || (e.item.originals || []).length;
+  btn.hidden = !any;
+  btn.disabled = e.reading > 0;
+}
+
+function queueRead(source) {
+  const e = state.edit;
+  if (!e) return;
+  e.reading++;
+  updateReadButton();
+  state.busy++;
+  e.readChain = e.readChain
+    .then(() => readOne(e, source))
+    .catch((err) => { if (state.edit === e) $('edit-progress').textContent = errText(err); })
+    .finally(() => {
+      state.busy--;
+      e.reading--;
+      if (state.edit === e) updateReadButton();
+    });
+}
+
+async function readOne(e, { key, file, pending }) {
+  if (state.edit !== e) return;
+  const progress = (t) => { if (state.edit === e) $('edit-progress').textContent = t; };
+  progress(`Reading ${file.name}…`);
+  let text = '';
+  if (isPdf(file)) {
+    const res = await pdfTextOrImage(file, {
+      password: pending && pending.pdfPassword,
+      askPassword: (msg) => ask({ title: 'Password needed', text: msg, input: 'password', okLabel: 'Open' }),
+    });
+    if (pending) pending.pdfPassword = res.password;
+    text = res.text;
+    if (res.firstPage) {
+      progress(`Reading ${file.name} (scanned page)…`);
+      text = await ocr.recognise(res.firstPage, (f) => progress(`Reading ${file.name}… ${Math.round(f * 100)}%`));
+    }
+  } else {
+    const canvas = await imageForOcr(file);
+    text = await ocr.recognise(canvas, (f) => progress(`Reading ${file.name}… ${Math.round(f * 100)}%`));
+  }
+  if (state.edit !== e) return;
+  e.texts.set(key, text);
+  const all = [...e.texts.values()].join('\n');
+  applyExtraction(extractDetails(all));
+}
+
+function markAuto(el) { el.classList.add('auto'); }
+
+function applyExtraction(r) {
+  const e = state.edit;
+  if (!e) return;
+  const found = r.fields.length;
+  if (!found && r.kind === 'other') {
+    $('edit-progress').textContent = 'No details recognised. Fill them in yourself, or try a sharper photo.';
+    return;
+  }
+  if (r.title && (e.titleAuto || !$('edit-title').value.trim())) {
+    $('edit-title').value = r.title;
+    e.titleAuto = true;
+    markAuto($('edit-title'));
+  }
+  if (r.category && !e.categoryTouched) {
+    $('edit-category').value = r.category;
+    markAuto($('edit-category'));
+  }
+  // Merge fields: fill empty matching rows, add new ones, drop unused empty suggestions.
+  const box = $('edit-fields');
+  const rows = () => [...box.querySelectorAll('.field-row')].map((row) => {
+    const [a, b] = row.querySelectorAll('input');
+    return { row, a, b };
+  });
+  for (const f of r.fields) {
+    const match = rows().find((x) => x.a.value.trim().toLowerCase() === f.label.toLowerCase());
+    if (match) {
+      // Empty, auto-filled, or a placeholder such as "0" or "-" is replaced.
+      if (/^[\s0.\-–—_?]{0,2}$/.test(match.b.value) || match.row.classList.contains('auto')) {
+        match.b.value = f.value;
+        match.row.classList.add('auto');
+      }
+    } else {
+      box.appendChild(fieldRow(f.label, f.value, true));
+    }
+  }
+  if (found) for (const x of rows()) if (!x.b.value.trim() && !x.a.matches(':focus')) x.row.remove();
+  // Tags
+  const tags = $('edit-tags').value.split(',').map((t) => t.trim()).filter(Boolean);
+  const merged = [...new Set([...tags, ...r.tags])];
+  if (merged.length !== tags.length) { $('edit-tags').value = merged.join(', '); markAuto($('edit-tags')); }
+  const unsure = r.fields.filter((f) => !f.sure).length;
+  $('edit-progress').textContent = found
+    ? `Found ${found} detail${found === 1 ? '' : 's'} — highlighted below. Check them${unsure ? ', especially names and branch' : ''} — nothing is saved until you press Save.`
+    : 'Recognised the document type but no details. Fill them in yourself.';
+}
+
+async function readStoredOriginals() {
+  const e = state.edit;
+  if (!e) return;
+  if (e.pending.length) {
+    for (const p of e.pending) queueRead({ key: p.key, file: p.file, pending: p });
+    return;
+  }
+  for (const o of e.item.originals || []) {
+    if (!/pdf|image/i.test(o.type || '') && !/\.(pdf|jpe?g|png|heic|heif|webp)$/i.test(o.name)) continue;
+    const bytes = await vault.getBlobBytes(o.id);
+    const file = new File([bytes], o.name, { type: o.type || '' });
+    queueRead({ key: 'orig-' + o.id, file, pending: null });
+  }
 }
 
 function renderEditThumbs() {
@@ -587,6 +712,10 @@ async function saveEdit() {
   $('edit-error').textContent = '';
   state.busy++;
   try {
+    if (e.reading) {
+      $('edit-progress').textContent = 'Finishing reading the document…';
+      await e.readChain;
+    }
     const newBlobs = [];
     const newPages = [];
     const newOriginals = [];
@@ -598,6 +727,7 @@ async function saveEdit() {
       $('edit-progress').textContent = `Preparing ${file.name}…`;
       if (isPdf(file)) {
         const res = await pdfToPages(file, {
+          password: p.pdfPassword,
           askPassword: (text) => ask({ title: 'Password needed', text, input: 'password', okLabel: 'Open' }),
           onProgress: (i, n) => { $('edit-progress').textContent = `Preparing ${file.name}: page ${i} of ${n}`; },
         });
@@ -628,6 +758,7 @@ async function saveEdit() {
       fields: readFieldRows(),
       notes: $('edit-notes').value.trim(),
       pinned: $('edit-pinned').checked,
+      text: e.texts.size ? [...e.texts.values()].join('\n').slice(0, 20000) : (e.item.text || ''),
       pages,
       originals: [...keptOriginals, ...newOriginals],
     };
@@ -1308,7 +1439,12 @@ function wire() {
     $('edit-fields').appendChild(row);
     row.querySelector('input').focus();
   });
+  $('edit-title').addEventListener('input', () => { if (state.edit) state.edit.titleAuto = false; $('edit-title').classList.remove('auto'); });
+  $('edit-tags').addEventListener('input', () => $('edit-tags').classList.remove('auto'));
+  $('edit-read').addEventListener('click', readStoredOriginals);
   $('edit-category').addEventListener('change', (e) => {
+    if (state.edit) state.edit.categoryTouched = true;
+    $('edit-category').classList.remove('auto');
     if (!readFieldRows().length) {
       setFieldRows(catOf(e.target.value).presets.map((l) => ({ label: l, value: '' })));
     }
@@ -1327,6 +1463,7 @@ function wire() {
       const p = state.edit.pending.find((x) => x.key === rq.dataset.removePending);
       if (p && p.preview) URL.revokeObjectURL(p.preview);
       state.edit.pending = state.edit.pending.filter((x) => x.key !== rq.dataset.removePending);
+      state.edit.texts.delete(rq.dataset.removePending);
     }
     if (rp || rq) renderEditThumbs();
   });

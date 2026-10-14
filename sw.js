@@ -6,7 +6,7 @@
 // A new VERSION makes browsers fetch the new files; the app then shows
 // "Version X is ready" and switches only when you tap Update.
 
-const VERSION = '1.1.3';
+const VERSION = '1.2.2';
 const CACHE = `pocket-vault-${VERSION}`;
 const FILES = [
   './',
@@ -18,8 +18,14 @@ const FILES = [
   'js/search.js',
   'js/media.js',
   'js/share.js',
+  'js/extract.js',
+  'js/ocr.js',
   'vendor/pdfjs/pdf.min.mjs',
   'vendor/pdfjs/pdf.worker.min.mjs',
+  'vendor/tesseract/tesseract.esm.min.js',
+  'vendor/tesseract/worker.min.js',
+  'vendor/tesseract/tesseract-core-simd-lstm.wasm.js',
+  'vendor/tesseract/lang/eng.traineddata.gz',
   'icons/icon-192.png',
   'icons/icon-512.png',
   'icons/apple-touch-icon.png',

@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-title" content="Vault">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="referrer" content="no-referrer">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob: data:; script-src 'self'; style-src 'self'; worker-src 'self' blob:; connect-src 'self'; font-src 'self' data: blob:; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob: data:; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; worker-src 'self' blob:; connect-src 'self'; font-src 'self' data: blob:; object-src 'none'; base-uri 'none'; form-action 'none'">
 <title>Pocket Vault</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png" type="image/png">
@@ -178,6 +178,7 @@
       </div>
     </div>
     <div class="thumbs" id="edit-thumbs"></div>
+    <button class="btn small" type="button" id="edit-read" hidden>Read details from the document</button>
     <p class="hint" id="edit-progress" role="status"></p>
 
     <label for="edit-title">Title</label>
