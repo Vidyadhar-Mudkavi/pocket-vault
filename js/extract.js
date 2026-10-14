@@ -229,7 +229,7 @@ function findAadhaarName(lines) {
 function findAddress(lines) {
   const pinRe = /(?<![0-9])([1-9][0-9]{2}\s?[0-9]{3})(?![0-9])/;
   const looksText = (l) => (l.match(/[A-Za-z]/g) || []).length >= Math.max(4, l.replace(/\s/g, '').length * 0.55);
-  const clean = (l) => l.replace(/^\s*address\s*[:\-]?\s*/i, '').replace(/[|_~]+/g, ' ').replace(/\s+/g, ' ').replace(/^[\s,.:;\-]+|[\s,;\-]+$/g, '').trim();
+  const clean = (l) => l.replace(/^(\s*address\s*[:\-]?\s*)+/i, '').replace(/[|_~]+/g, ' ').replace(/\s+/g, ' ').replace(/^[\s,.:;\-]+|[\s;\-]+$/g, '').trim();
   const skip = (l) => /\b(dob|date of birth|male|female|vid|aadhaar|government of india|unique identification|enrol\w*|mobile|help@|1947|www\.)\b/i.test(l);
   const pinEnd = (from, max) => {
     for (let i = from; i < Math.min(lines.length, from + max); i++) if (pinRe.test(lines[i])) return i;
@@ -281,7 +281,16 @@ function findAddress(lines) {
   // A bare name directly above "S/O …" / "C/O …" is the holder's name, not address.
   if (!name && parts.length > 2 && /^[A-Za-z][A-Za-z.']*( [A-Za-z][A-Za-z.']*){1,3}$/.test(parts[0]) && /^[CSDW]\s?\/\s?O\b/i.test(parts[1])) name = parts.shift();
   if (!parts.length) return null;
-  const text = parts.join(', ').replace(/,\s*,/g, ',').replace(/\s+,/g, ',');
+  // Lines already separated by commas ("…, 243, 7-th / Main, …") are a wrapped
+  // paragraph: rejoin with spaces. Otherwise each line is one part of the address.
+  const dense = parts.filter((x) => (x.match(/,/g) || []).length >= 2).length;
+  const commaStyle = parts.length >= 2 && dense * 3 >= parts.length * 2;
+  let text = '';
+  for (const x of parts) {
+    if (!text) text = x;
+    else text += (commaStyle || /,$/.test(text)) ? ' ' + x : ', ' + x;
+  }
+  text = text.replace(/,\s*,/g, ',').replace(/\s+,/g, ',').replace(/,\s*$/, '');
   const pm = text.match(pinRe);
   return { text, pin: pm ? pm[1].replace(/\s/g, '') : null, name };
 }

@@ -149,20 +149,33 @@ export async function pdfTextOrImage(file, { askPassword, password, maxPages = 3
   for (let i = 1; i <= n; i++) {
     const page = await doc.getPage(i);
     const content = await page.getTextContent();
-    let line = [];
+    // Some PDFs (e.g. e-Aadhaar re-saved on a Mac) place every letter as its
+    // own item. Join items by position: a space only where there is a gap.
+    let line = '';
     let lastY = null;
+    let prevEnd = null;
+    let space = false;
+    const flush = () => {
+      const l = line.replace(/[\u0000-\u001f]/g, '').replace(/\s+/g, ' ').trim();
+      if (l) lines.push(l);
+      line = ''; prevEnd = null; space = false;
+    };
     for (const it of content.items) {
       if (!('str' in it)) continue;
-      const y = Math.round(it.transform[5]);
-      if (lastY !== null && Math.abs(y - lastY) > 2 && line.length) {
-        lines.push(line.join(' ').replace(/\s+/g, ' ').trim());
-        line = [];
-      }
-      if (it.str.trim()) line.push(it.str);
+      const [a, b0, , , x, yRaw] = it.transform;
+      if (Math.abs(b0) > Math.abs(a) * 0.1) continue; // rotated side text (e.g. download date)
+      const y = Math.round(yRaw);
+      if (lastY !== null && Math.abs(y - lastY) > 2) flush();
       lastY = y;
-      if (it.hasEOL && line.length) { lines.push(line.join(' ').replace(/\s+/g, ' ').trim()); line = []; lastY = null; }
+      if (!it.str.trim()) { space = true; if (it.hasEOL) flush(); continue; }
+      const size = Math.hypot(a, b0) || it.height || 10;
+      if (line && (space || prevEnd === null || x - prevEnd > size * 0.18 || x < prevEnd - size)) line += ' ';
+      line += it.str;
+      prevEnd = x + (it.width || 0);
+      space = /\s$/.test(it.str);
+      if (it.hasEOL) flush();
     }
-    if (line.length) lines.push(line.join(' ').replace(/\s+/g, ' ').trim());
+    flush();
     page.cleanup();
   }
   const text = lines.filter(Boolean).join('\n');
