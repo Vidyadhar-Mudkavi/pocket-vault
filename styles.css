@@ -326,3 +326,16 @@ dialog::backdrop { background: rgba(10, 14, 18, 0.45); }
   #screen-recovery .row, #screen-recovery .check, #screen-recovery #recovery-done { display: none !important; }
   .recovery-code { border-color: #000; font-size: 26px; }
 }
+
+/* ---------- share ---------- */
+.choice { border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); padding: 12px 14px; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.choice legend { font-size: 13px; font-weight: 600; color: var(--muted); padding: 0 4px; }
+.radio { display: flex; align-items: flex-start; gap: 10px; font-size: 15px; font-weight: 400; color: var(--ink); min-height: 44px; padding: 4px 0; cursor: pointer; }
+.radio input { width: 20px; height: 20px; min-height: 0; margin-top: 2px; accent-color: var(--accent); flex: none; }
+.radio.inline { min-height: 36px; align-items: center; }
+.indent { padding-left: 32px; }
+.choice .check { min-height: 40px; }
+#share-fields .check { padding-left: 32px; min-height: 36px; font-size: 14px; }
+.shared-banner { background: var(--accent-soft); color: var(--accent-soft-ink); }
+.viewer .shared-note { padding: 4px 16px; font-size: 14px; color: #5A6470; text-align: center; }
+.share-val { font-family: var(--mono); font-size: 14px; word-break: break-word; }

@@ -6,7 +6,7 @@
 // A new VERSION makes browsers fetch the new files; the app then shows
 // "Version X is ready" and switches only when you tap Update.
 
-const VERSION = '1.0.3';
+const VERSION = '1.1.3';
 const CACHE = `pocket-vault-${VERSION}`;
 const FILES = [
   './',
@@ -17,6 +17,7 @@ const FILES = [
   'js/vault.js',
   'js/search.js',
   'js/media.js',
+  'js/share.js',
   'vendor/pdfjs/pdf.min.mjs',
   'vendor/pdfjs/pdf.worker.min.mjs',
   'icons/icon-192.png',

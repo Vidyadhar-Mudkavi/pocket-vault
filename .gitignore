@@ -3,3 +3,6 @@ OPERATIONS-GUIDE.md
 KNOWLEDGE-BASE.md
 USER-MANUAL.md
 HOWTO-SYNC.md
+Recovery-Codes/
+pocket-vault-backup-*.json
+*.secure.json

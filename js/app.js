@@ -2,8 +2,9 @@
 import * as vault from './vault.js';
 import { search } from './search.js';
 import { imageToPage, pdfToPages, isPdf, isImage, MAX_PDF_PAGES } from './media.js';
+import * as share from './share.js';
 
-export const APP_VERSION = '1.0.3';
+export const APP_VERSION = '1.1.3';
 const AUTO_LOCK_MS = 5 * 60 * 1000;   // lock after 5 minutes without a touch or key
 const HIDDEN_LOCK_MS = 60 * 1000;     // lock if the app was in the background over a minute
 const DAY = 86400000;
@@ -353,6 +354,7 @@ function renderDetail() {
     <div class="detail-head">
       <button class="btn link back-btn" type="button" data-act="back">${I.back} Vault</button>
       <div class="detail-actions">
+        <button class="btn small" type="button" data-act="share">Share</button>
         <button class="btn small" type="button" data-act="edit">Edit</button>
         ${pages.length ? '<button class="btn small primary" type="button" data-act="show">Show</button>' : ''}
       </div>
@@ -416,6 +418,7 @@ function closeViewer() {
   v.hidden = true;
   state.viewerOpen = false;
   $('viewer-pages').innerHTML = '';
+  closeSharedExtras();
   releaseWakeLock();
   state.lastActivity = Date.now();
 }
@@ -863,6 +866,249 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+
+// ---------- sharing ----------
+// Two steps: Prepare (slow work) then Send (must run inside a fresh tap,
+// because browsers only open the share sheet straight after a user gesture).
+
+const SHARE_LINK = 'https://vidyadhar-mudkavi.github.io/pocket-vault/';
+
+function shareMode() { return document.querySelector('input[name="share-mode"]:checked').value; }
+function shareFormat() { return document.querySelector('input[name="share-format"]:checked').value; }
+
+function watermarkText() {
+  const who = $('share-for').value.trim();
+  const why = $('share-purpose').value.trim();
+  const parts = [who ? `Copy for ${who}` : 'Copy'];
+  if (why) parts.push(`for ${why} only`);
+  parts.push(share.todayLabel());
+  return parts.join(' · ');
+}
+
+function chosenFields() {
+  const item = state.share && state.share.item;
+  if (!item) return [];
+  const fields = (item.fields || []).filter((f) => f.value);
+  return [...$('share-fields').querySelectorAll('input[type=checkbox]')]
+    .filter((c) => c.checked)
+    .map((c) => fields[+c.dataset.i]);
+}
+
+function refreshShareForm() {
+  const sh = state.share;
+  if (!sh) return;
+  const secure = shareMode() === 'secure';
+  const hasPages = (sh.item.pages || []).length > 0;
+  const pagesOn = hasPages && $('share-pages').checked;
+  const origs = sh.item.originals || [];
+  $('share-format-row').hidden = secure || !pagesOn;
+  $('share-format-orig').hidden = !origs.length;
+  if (!origs.length && shareFormat() === 'original') document.querySelector('input[name="share-format"][value="pdf"]').checked = true;
+  const sendingOriginals = !secure && pagesOn && shareFormat() === 'original';
+  $('share-orig-secure-row').hidden = !(secure && pagesOn && origs.length);
+  const names = origs.map((o) => o.name).join(', ');
+  const protectedPdf = origs.some((o) => /pdf/i.test(o.type || o.name));
+  $('share-orig-hint').textContent = (sendingOriginals || (secure && $('share-orig-secure').checked && origs.length))
+    ? `Exactly as added: ${names}.${protectedPdf ? ' A password-protected PDF stays protected.' : ''} No watermark on originals.`
+    : '';
+  $('share-wm').hidden = !pagesOn || sendingOriginals;
+  const wmOn = $('share-wm-on').checked;
+  $('share-wm-fields').hidden = !wmOn;
+  $('share-wm-preview').textContent = wmOn ? `Stamp: “${watermarkText()}”` : '';
+  const anyAadhaar = (sh.item.fields || []).some((f) => f.value && share.looksLikeAadhaar(f));
+  $('share-mask-row').hidden = !anyAadhaar;
+  $('share-note').textContent = secure
+    ? 'The recipient opens the file in Pocket Vault at ' + SHARE_LINK + ' (no vault needed) and types the code.'
+    : 'The copy you send is not encrypted once it leaves this app. Delete it from the chat after use.';
+  $('share-ready').hidden = true;
+  sh.prepared = null;
+}
+
+function openShare(item) {
+  state.share = { item, prepared: null };
+  $('share-heading').textContent = `Share: ${item.title}`;
+  const nPages = (item.pages || []).length;
+  $('share-pages').checked = nPages > 0;
+  $('share-pages').disabled = nPages === 0;
+  $('share-pages-label').textContent = nPages ? `Pages (${nPages})` : 'No pages — details only';
+  const fields = (item.fields || []).filter((f) => f.value);
+  $('share-fields').innerHTML = fields.length
+    ? fields.map((f, i) => `<label class="check"><input type="checkbox" data-i="${i}" checked> ${esc(f.label || 'Detail')}: <span class="share-val">${esc(f.value)}</span></label>`).join('')
+    : '<p class="hint indent">No details to include.</p>';
+  $('share-error').textContent = '';
+  document.querySelector('input[name="share-mode"][value="normal"]').checked = true;
+  document.querySelector('input[name="share-format"][value="pdf"]').checked = true;
+  $('share-wm-on').checked = false;
+  $('share-orig-secure').checked = false;
+  $('share-mask').checked = true;
+  refreshShareForm();
+  $('dlg-share').showModal();
+}
+
+async function prepareShare() {
+  const sh = state.share;
+  if (!sh) return;
+  const item = sh.item;
+  const secure = shareMode() === 'secure';
+  const includePages = $('share-pages').checked && (item.pages || []).length > 0;
+  const fields = chosenFields();
+  if (!includePages && !fields.length) { $('share-error').textContent = 'Choose pages or at least one detail.'; return; }
+  const mask = $('share-mask').checked;
+  const useOriginals = includePages && !secure && shareFormat() === 'original';
+  const addOriginals = includePages && secure && $('share-orig-secure').checked;
+  const wm = includePages && !useOriginals && $('share-wm-on').checked ? watermarkText() : null;
+  const btn = $('share-prepare');
+  btn.disabled = true;
+  $('share-error').textContent = '';
+  state.busy++;
+  try {
+    const pages = [];
+    const originals = [];
+    if (useOriginals || addOriginals) {
+      for (const o of item.originals || []) {
+        btn.textContent = `Reading ${o.name}…`;
+        originals.push({ name: o.name, type: o.type || 'application/octet-stream', bytes: new Uint8Array(await vault.getBlobBytes(o.id)) });
+      }
+    }
+    if (includePages && !useOriginals) {
+      for (let i = 0; i < item.pages.length; i++) {
+        btn.textContent = `Preparing page ${i + 1} of ${item.pages.length}…`;
+        const bytes = await vault.getBlobBytes(item.pages[i].id);
+        pages.push(await share.preparePage(bytes, wm));
+      }
+    }
+    const text = fields.length ? share.detailsText(item.title, fields, { mask }) : '';
+    const outFields = fields.map((f) => ({ label: f.label, value: mask && share.looksLikeAadhaar(f) ? share.maskAadhaar(f.value) : f.value }));
+    const base = share.safeFileName(item.title);
+    const prepared = { files: [], text, code: null, label: '' };
+    if (secure) {
+      btn.textContent = 'Encrypting…';
+      const code = share.newShareCode();
+      const blob = await share.makePackage({ title: item.title, note: wm || '', fields: outFields, pages, originals }, code);
+      prepared.files.push(new File([blob], `${base}.secure.json`, { type: 'application/json' }));
+      prepared.code = share.formatShareCode(code);
+      prepared.text = `Secure document from Pocket Vault: “${item.title}”. Open ${SHARE_LINK} → “Open a shared document”, choose this file, and enter the code I send you separately.`;
+      prepared.label = `Secure package ready (${(blob.size / 1048576).toFixed(1)} MB). Pages and details are inside it.`;
+    } else {
+      if (useOriginals) {
+        originals.forEach((o) => prepared.files.push(new File([o.bytes], o.name, { type: o.type })));
+      } else if (pages.length) {
+        if (shareFormat() === 'pdf') {
+          const pdf = share.buildPdf(pages, item.title);
+          prepared.files.push(new File([pdf], `${base}.pdf`, { type: 'application/pdf' }));
+        } else {
+          pages.forEach((p, i) => prepared.files.push(new File([p.bytes], `${base}${pages.length > 1 ? '-' + (i + 1) : ''}.jpg`, { type: 'image/jpeg' })));
+        }
+      }
+      const size = prepared.files.reduce((a, f) => a + f.size, 0);
+      prepared.label = prepared.files.length
+        ? `Ready: ${prepared.files.length} file${prepared.files.length > 1 ? 's' : ''} (${(size / 1048576).toFixed(1)} MB).${text ? ' Send it, then use Copy details and paste them into the same chat.' : ''}`
+        : 'Details ready as text.';
+    }
+    sh.prepared = prepared;
+    $('share-ready-text').textContent = prepared.label;
+    $('share-code-box').hidden = !prepared.code;
+    $('share-code').textContent = prepared.code || '';
+    $('share-copy-text').hidden = !text || secure;
+    $('share-save').hidden = !prepared.files.length;
+    $('share-ready').hidden = false;
+    $('share-ready').scrollIntoView({ block: 'nearest' });
+  } catch (err) {
+    $('share-error').textContent = errText(err);
+  } finally {
+    state.busy--;
+    btn.disabled = false;
+    btn.textContent = 'Prepare';
+  }
+}
+
+async function sendShare() {
+  const p = state.share && state.share.prepared;
+  if (!p) return;
+  // Files go alone: more apps accept a single file than file + text, and some
+  // (WhatsApp) drop the text anyway. Details travel via "Copy details".
+  const data = p.files.length ? { files: p.files } : { text: p.text, title: state.share.item.title };
+  try {
+    if (navigator.share && (!data.files || (navigator.canShare && navigator.canShare({ files: data.files })))) {
+      await navigator.share(data);
+      toast(p.code ? 'Sent. Now give the code by phone or SMS.' : 'Shared.', 4000);
+      return;
+    }
+  } catch (err) {
+    if (err && err.name === 'AbortError') return;
+  }
+  // No share sheet available: save the file(s) and copy the text instead.
+  saveShareFiles();
+  if (p.text && !p.code) await copyText(p.text, 'details');
+}
+
+function saveShareFiles() {
+  const p = state.share && state.share.prepared;
+  if (!p) return;
+  for (const f of p.files) {
+    const url = URL.createObjectURL(f);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = f.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+  toast(p.files.length > 1 ? 'Files saved to Downloads.' : 'File saved to Downloads.', 3000);
+}
+
+// ---------- opening a shared package ----------
+
+function pickShareFile() {
+  return new Promise((resolve) => {
+    const input = $('file-share-pkg');
+    input.value = '';
+    const onChange = () => { input.removeEventListener('change', onChange); resolve(input.files[0] || null); };
+    input.addEventListener('change', onChange);
+    input.click();
+  });
+}
+
+function openSharedDialog() {
+  if ($('dlg-settings').open) $('dlg-settings').close();
+  state.sharedPkg = null;
+  $('open-share-file').textContent = 'No file chosen.';
+  $('open-share-code').value = '';
+  $('open-share-error').textContent = '';
+  $('dlg-open-share').showModal();
+}
+
+function showSharedViewer(payload) {
+  const v = $('viewer');
+  v.classList.remove('handover');
+  $('viewer-handover').setAttribute('aria-pressed', 'false');
+  $('viewer-handover').textContent = 'Hand over';
+  $('viewer-title').textContent = `${payload.title} (shared)`;
+  const urls = payload.pages.map((p) => URL.createObjectURL(new Blob([p.bytes], { type: p.type || 'image/jpeg' })));
+  state.sharedUrls = urls;
+  $('viewer-pages').innerHTML = urls.length
+    ? urls.map((u, i) => `<div class="viewer-page"><img alt="Page ${i + 1} of ${esc(payload.title)}" src="${esc(u)}"></div>`).join('')
+    : '<div class="viewer-page"><p class="shared-note">No pages — details below.</p></div>';
+  const fields = (payload.fields || []).filter((f) => f.value);
+  const sent = payload.created ? ` · sent ${fmtDate(payload.created)}` : '';
+  $('viewer-fields').innerHTML =
+    fields.map((f, i) => `<div class="vf"><span>${esc(f.label)}</span><strong>${esc(f.value)}</strong> <button type="button" class="copy-btn" data-shared-copy="${i}">Copy</button></div>`).join('') +
+    `<div class="vf"><span>Shared document${esc(sent)}</span><button type="button" class="copy-btn" id="shared-save-pages">Save pages</button></div>` +
+    (payload.originals || []).map((o, i) => `<div class="vf"><span>Original file</span><button type="button" class="copy-btn" data-shared-orig="${i}">Save ${esc(o.name)}</button></div>`).join('');
+  state.sharedPayload = payload;
+  v.hidden = false;
+  state.viewerOpen = true;
+  updateViewerCount();
+  requestWakeLock();
+}
+
+function closeSharedExtras() {
+  if (state.sharedUrls) { for (const u of state.sharedUrls) URL.revokeObjectURL(u); }
+  state.sharedUrls = null;
+  state.sharedPayload = null;
+}
+
 // ---------- wiring ----------
 function wire() {
   for (const ev of ['pointerdown', 'keydown', 'input', 'wheel', 'touchstart']) {
@@ -1015,6 +1261,9 @@ function wire() {
       case 'edit':
         openEdit(item);
         break;
+      case 'share':
+        openShare(item);
+        break;
       case 'delete': {
         const sure = await ask({ title: `Delete “${item.title}”?`, text: 'Its scans and details will be removed from this device. Backups you made earlier still contain it.', okLabel: 'Delete', danger: true });
         if (!sure) return;
@@ -1155,6 +1404,80 @@ function wire() {
       });
     } catch (ex) {
       toast(errText(ex), 4000);
+    }
+  });
+
+  // Share dialog
+  $('share-cancel').addEventListener('click', () => { $('dlg-share').close(); state.share = null; });
+  $('dlg-share').addEventListener('close', () => { state.share = null; });
+  $('form-share').addEventListener('submit', (e) => { e.preventDefault(); prepareShare(); });
+  $('form-share').addEventListener('change', (e) => { if (e.target.id !== 'share-for' && e.target.id !== 'share-purpose') refreshShareForm(); });
+  for (const id of ['share-for', 'share-purpose']) $(id).addEventListener('input', refreshShareForm);
+  $('share-send').addEventListener('click', sendShare);
+  $('share-save').addEventListener('click', saveShareFiles);
+  $('share-copy-code').addEventListener('click', () => copyText($('share-code').textContent, 'share code'));
+  $('share-copy-text').addEventListener('click', () => {
+    const p = state.share && state.share.prepared;
+    if (p && p.text) copyText(p.text, 'details');
+  });
+
+  // Open a shared document (works with or without a vault on this device)
+  for (const id of ['setup-open-share', 'unlock-open-share', 'settings-open-share']) $(id).addEventListener('click', openSharedDialog);
+  $('open-share-cancel').addEventListener('click', () => $('dlg-open-share').close());
+  $('open-share-pick').addEventListener('click', async () => {
+    const file = await pickShareFile();
+    if (!file) return;
+    $('open-share-error').textContent = '';
+    try {
+      state.sharedPkg = await share.readPackageFile(file);
+      $('open-share-file').textContent = `File: ${file.name}`;
+      $('open-share-code').focus();
+    } catch (err) {
+      state.sharedPkg = null;
+      $('open-share-file').textContent = 'No file chosen.';
+      $('open-share-error').textContent = errText(err);
+    }
+  });
+  $('form-open-share').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const err = $('open-share-error');
+    err.textContent = '';
+    if (!state.sharedPkg) { err.textContent = 'Choose the file first.'; return; }
+    const btn = $('open-share-ok');
+    btn.disabled = true;
+    btn.textContent = 'Opening…';
+    try {
+      const payload = await share.openPackage(state.sharedPkg, $('open-share-code').value);
+      $('dlg-open-share').close();
+      state.sharedPkg = null;
+      showSharedViewer(payload);
+    } catch (ex) {
+      err.textContent = errText(ex);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Open';
+    }
+  });
+  $('viewer-fields').addEventListener('click', async (e) => {
+    const payload = state.sharedPayload;
+    if (!payload) return;
+    const c = e.target.closest('[data-shared-copy]');
+    if (c) {
+      const f = payload.fields.filter((x) => x.value)[+c.dataset.sharedCopy];
+      if (f) copyText(f.value, f.label);
+      return;
+    }
+    const so = e.target.closest('[data-shared-orig]');
+    if (so) {
+      const o = payload.originals[+so.dataset.sharedOrig];
+      if (o) await deliverFile(new Blob([o.bytes], { type: o.type }), o.name, o.name);
+      return;
+    }
+    if (e.target.id === 'shared-save-pages') {
+      if (!payload.pages.length) { toast('No pages in this document.'); return; }
+      const base = share.safeFileName(payload.title);
+      const pdf = share.buildPdf(payload.pages, payload.title);
+      await deliverFile(pdf, `${base}.pdf`, payload.title);
     }
   });
 

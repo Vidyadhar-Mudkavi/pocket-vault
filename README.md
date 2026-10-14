@@ -15,6 +15,7 @@ anywhere; this repository holds only the app's code.
 | `js/vault.js` | Encryption (AES-256-GCM, PBKDF2-SHA256 600 000 rounds) and IndexedDB storage |
 | `js/search.js` | Forgiving search, built for dictated words ("show my passport", "aadhar") |
 | `js/media.js` | Turns added images and PDFs into page images for fast offline viewing |
+| `js/share.js` | Sharing: watermarked copies, PDF writer, encrypted share packages |
 | `sw.js` | Service worker: keeps the app's own files offline; handles updates |
 | `vendor/pdfjs/` | Mozilla pdf.js 4.10.38 (Apache 2.0), bundled so PDFs work offline |
 

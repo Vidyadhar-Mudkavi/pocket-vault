@@ -44,6 +44,7 @@
       <button class="btn primary" type="submit" id="setup-submit">Create my vault</button>
     </form>
     <button class="btn link" type="button" id="setup-restore">I have a backup file — restore it</button>
+    <button class="btn link" type="button" id="setup-open-share">Someone sent me a document — open it</button>
   </div>
 </section>
 
@@ -83,6 +84,7 @@
       <button class="btn primary" type="submit" id="recovery-unlock-submit">Unlock with recovery code</button>
     </form>
     <button class="btn link" type="button" id="unlock-toggle">Forgot the passphrase? Use the recovery code</button>
+    <button class="btn link" type="button" id="unlock-open-share">Open a shared document</button>
     <p class="pill"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg><span id="unlock-status">Encrypted on this device</span></p>
   </div>
 </section>
@@ -218,6 +220,11 @@
       </div>
     </section>
     <section class="card">
+      <h3>Shared documents</h3>
+      <p class="muted">Open a secure package someone sent you. Nothing is added to your vault.</p>
+      <button class="btn" type="button" id="settings-open-share">Open a shared document…</button>
+    </section>
+    <section class="card">
       <h3>Passphrase</h3>
       <form id="form-change-pass" class="stack" autocomplete="on">
         <input class="visually-hidden" type="text" name="username" autocomplete="username" value="Pocket Vault" tabindex="-1" aria-hidden="true" readonly>
@@ -255,6 +262,87 @@
   </form>
 </dialog>
 
+
+<!-- ===== Share ===== -->
+<dialog id="dlg-share" class="sheet" aria-labelledby="share-heading">
+  <form id="form-share" method="dialog" class="sheet-body">
+    <header class="sheet-head">
+      <button class="btn link" type="button" id="share-cancel">Cancel</button>
+      <h2 id="share-heading">Share</h2>
+      <span></span>
+    </header>
+
+    <fieldset class="choice">
+      <legend>Send as</legend>
+      <label class="radio"><input type="radio" name="share-mode" value="normal" checked>
+        <span><strong>Normal copy</strong><br><span class="muted">A PDF or images that open anywhere.</span></span></label>
+      <label class="radio"><input type="radio" name="share-mode" value="secure">
+        <span><strong>Secure package</strong><br><span class="muted">Encrypted. Opens only in Pocket Vault with a code you send separately.</span></span></label>
+    </fieldset>
+
+    <fieldset class="choice" id="share-what">
+      <legend>Include</legend>
+      <label class="check" id="share-pages-row"><input type="checkbox" id="share-pages" checked> <span id="share-pages-label">Pages</span></label>
+      <div id="share-format-row" class="row gap wrap indent">
+        <label class="radio inline"><input type="radio" name="share-format" value="pdf" checked> One PDF</label>
+        <label class="radio inline"><input type="radio" name="share-format" value="images"> Images</label>
+        <label class="radio inline" id="share-format-orig"><input type="radio" name="share-format" value="original"> Original file(s)</label>
+      </div>
+      <label class="check indent" id="share-orig-secure-row"><input type="checkbox" id="share-orig-secure"> Also include the original file(s)</label>
+      <p class="hint indent" id="share-orig-hint"></p>
+      <div id="share-fields"></div>
+      <label class="check" id="share-mask-row"><input type="checkbox" id="share-mask" checked> Mask Aadhaar numbers (XXXX XXXX 1234)</label>
+    </fieldset>
+
+    <fieldset class="choice" id="share-wm">
+      <legend>Watermark</legend>
+      <label class="check"><input type="checkbox" id="share-wm-on"> Stamp the pages (optional)</label>
+      <div id="share-wm-fields" class="stack" hidden>
+        <label for="share-for">Copy for (name)</label>
+        <input id="share-for" placeholder="e.g. Sankarshan" autocomplete="off">
+        <label for="share-purpose">Purpose</label>
+        <input id="share-purpose" placeholder="e.g. visa application" autocomplete="off">
+        <p class="hint" id="share-wm-preview"></p>
+      </div>
+    </fieldset>
+
+    <p class="hint" id="share-note"></p>
+    <p class="error" id="share-error" role="alert"></p>
+    <button class="btn primary" type="submit" id="share-prepare">Prepare</button>
+
+    <section id="share-ready" class="card" hidden>
+      <p id="share-ready-text"></p>
+      <div id="share-code-box" hidden>
+        <p class="muted">Share code — send it by a <strong>different route</strong> (phone call or SMS), never in the same message as the file:</p>
+        <p class="recovery-code" id="share-code"></p>
+        <button class="btn" type="button" id="share-copy-code">Copy code</button>
+      </div>
+      <div class="row gap wrap">
+        <button class="btn primary" type="button" id="share-send">Send…</button>
+        <button class="btn" type="button" id="share-save">Save to file</button>
+        <button class="btn" type="button" id="share-copy-text">Copy details</button>
+      </div>
+    </section>
+  </form>
+</dialog>
+
+<!-- ===== Open a shared document ===== -->
+<dialog id="dlg-open-share" class="ask" aria-labelledby="open-share-title">
+  <form id="form-open-share" method="dialog" class="stack">
+    <h2 id="open-share-title">Open a shared document</h2>
+    <p class="muted" id="open-share-text">Choose the file you received, then enter the code the sender gave you separately.</p>
+    <button class="btn" type="button" id="open-share-pick">Choose file…</button>
+    <p class="hint" id="open-share-file"></p>
+    <label for="open-share-code">Share code</label>
+    <input id="open-share-code" type="text" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" placeholder="XXXX-XXXX-XXXX">
+    <p class="error" id="open-share-error" role="alert"></p>
+    <div class="row gap end">
+      <button class="btn" type="button" id="open-share-cancel">Cancel</button>
+      <button class="btn primary" type="submit" id="open-share-ok">Open</button>
+    </div>
+  </form>
+</dialog>
+<input type="file" id="file-share-pkg" class="visually-hidden">
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 <input type="file" id="file-backup" accept=".json,application/json" class="visually-hidden">
 
