@@ -48,6 +48,7 @@ export async function recognise(image, onProgress) {
 // swdsd") but marks it with near-zero confidence. Keep only words it is
 // reasonably sure of, and drop stray marks at the start of a line.
 const MIN_WORD = 30;
+const LABEL_TAIL = /(Branch|IFSC|MICR|Address|Name|E-?mail|Phone|CIF|Nominee|Account|DOB)\s*[:.]?$/i;
 function confidentText(data) {
   if (!data) return '';
   if (!Array.isArray(data.blocks) || !data.blocks.length) return data.text || '';
@@ -55,7 +56,14 @@ function confidentText(data) {
   for (const block of data.blocks) {
     for (const para of block.paragraphs || []) {
       for (const line of para.lines || []) {
-        const words = (line.words || []).filter((w) => w.confidence >= MIN_WORD && w.text.trim());
+        const words = [];
+        for (const w of line.words || []) {
+          if (!w.text.trim()) continue;
+          if (w.confidence >= MIN_WORD) { words.push(w); continue; }
+          // A label glued to misread script ("dpBranch:") is kept without the junk.
+          const m = w.text.match(LABEL_TAIL);
+          if (m) words.push({ text: m[0], confidence: MIN_WORD });
+        }
         while (words.length && !/[A-Za-z0-9#]/.test(words[0].text)) words.shift();
         while (words.length && !/[A-Za-z0-9.)]/.test(words[words.length - 1].text)) words.pop();
         if (words.length) out.push(words.map((w) => w.text).join(' '));

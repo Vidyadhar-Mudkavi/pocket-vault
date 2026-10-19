@@ -1,6 +1,7 @@
 // Pocket Vault — turns added files into page images for fast offline viewing.
 // Images are downscaled; PDFs are rendered page by page with pdf.js (bundled).
 
+const OCR_EDGE = 3300;      // px, long edge when reading a scanned PDF page
 const MAX_EDGE = 2400;      // px, long edge of a stored page image
 const JPEG_QUALITY = 0.88;
 export const MAX_PDF_PAGES = 30;
@@ -105,10 +106,10 @@ export async function openPdf(file, { askPassword, password } = {}) {
   }
 }
 
-async function renderPdfPage(doc, i) {
+async function renderPdfPage(doc, i, maxEdge = MAX_EDGE) {
   const page = await doc.getPage(i);
   const v1 = page.getViewport({ scale: 1 });
-  const scale = Math.min(3, MAX_EDGE / Math.max(v1.width, v1.height));
+  const scale = Math.min(3, maxEdge / Math.max(v1.width, v1.height));
   const viewport = page.getViewport({ scale });
   const canvas = makeCanvas(viewport.width, viewport.height);
   const ctx = canvas.getContext('2d');
@@ -180,7 +181,8 @@ export async function pdfTextOrImage(file, { askPassword, password, maxPages = 3
   }
   const text = lines.filter(Boolean).join('\n');
   let firstPage = null;
-  if (text.replace(/\s/g, '').length < 40) firstPage = await renderPdfPage(doc, 1);
+  // Scanned page: render larger than the stored image; small print reads better.
+  if (text.replace(/\s/g, '').length < 40) firstPage = await renderPdfPage(doc, 1, OCR_EDGE);
   await doc.destroy();
   return { text, password: used, firstPage };
 }

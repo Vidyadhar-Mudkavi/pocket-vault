@@ -6,7 +6,7 @@ import * as share from './share.js';
 import { extractDetails } from './extract.js';
 import * as ocr from './ocr.js';
 
-export const APP_VERSION = '1.2.4';
+export const APP_VERSION = '1.2.5';
 const AUTO_LOCK_MS = 5 * 60 * 1000;   // lock after 5 minutes without a touch or key
 const HIDDEN_LOCK_MS = 60 * 1000;     // lock if the app was in the background over a minute
 const DAY = 86400000;

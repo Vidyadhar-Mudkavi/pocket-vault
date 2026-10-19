@@ -150,6 +150,18 @@ const BANKS = {
   DLXB: ['Dhanlaxmi', 'Dhanlaxmi Bank'], JAKA: ['J&K Bank', 'Jammu and Kashmir Bank'], ESFB: ['Equitas', 'Equitas Small Finance Bank'],
 };
 
+// Bank e-mail domains printed on passbooks (e.g. sbi.04815@sbi.co.in).
+const BANK_DOMAINS = {
+  'sbi.co.in': 'SBIN', 'hdfcbank.com': 'HDFC', 'icicibank.com': 'ICIC', 'axisbank.com': 'UTIB', 'canarabank.com': 'CNRB',
+  'bankofbaroda.com': 'BARB', 'bankofbaroda.co.in': 'BARB', 'unionbankofindia.bank': 'UBIN', 'unionbankofindia.com': 'UBIN',
+  'pnb.co.in': 'PUNB', 'pnb.bank.in': 'PUNB', 'kotak.com': 'KKBK', 'indusind.com': 'INDB', 'yesbank.in': 'YESB',
+  'idfcfirstbank.com': 'IDFB', 'federalbank.co.in': 'FDRL', 'indianbank.co.in': 'IDIB', 'bankofindia.co.in': 'BKID',
+  'centralbank.co.in': 'CBIN', 'iob.in': 'IOBA', 'ucobank.co.in': 'UCBA', 'mahabank.co.in': 'MAHB', 'psb.co.in': 'PSIB',
+  'ktkbank.com': 'KARB', 'kvb.co.in': 'KVBL', 'cityunionbank.com': 'CIUB', 'sib.co.in': 'SIBL', 'tmb.in': 'TMBL',
+};
+// Words that only a bank document carries in numbers; three or more → it is a bank document.
+const BANK_MARKERS = [/\bA\/?C\s*(NO|NUMBER|TYPE|OPENING|HOLDER)/, /\bACCOUNT\s*(NO|NUMBER|TYPE)\b/, /\bCIF\b/, /\bMICR\b/,
+  /\bIFS\s?C\b/, /PASS\s?BOOK/, /SAVINGS\s*(BANK|ACCOUNT|A\/C)|CURRENT\s*ACCOUNT/, /NOMINEE|NOM\s*REG/, /\bBRANCH\b/, /\bMOP\b|EITHER\s*OR\s*SURVIVOR/];
 const BANK_NAMES = Object.values(BANKS).map(([short, long]) => ({ short, long, re: new RegExp('\\b' + long.replace(/[&]/g, '(&|and)').replace(/\s+/g, '\\s*') + '\\b', 'i') }));
 
 function findIfsc(text) {
@@ -229,7 +241,7 @@ function findAadhaarName(lines) {
 function findAddress(lines) {
   const pinRe = /(?<![0-9])([1-9][0-9]{2}\s?[0-9]{3})(?![0-9])/;
   const looksText = (l) => (l.match(/[A-Za-z]/g) || []).length >= Math.max(4, l.replace(/\s/g, '').length * 0.55);
-  const clean = (l) => l.replace(/^(\s*address\s*[:\-]?\s*)+/i, '').replace(/[|_~]+/g, ' ').replace(/\s+/g, ' ').replace(/^[\s,.:;\-]+|[\s;\-]+$/g, '').trim();
+  const clean = (l) => l.replace(/\s+(date\s*of\s*issue|continuation|customer'?s\s*pan|nom(inee)?\s*reg|mop|micr|ifsc|\+\s*continuation)\b.*$/i, '').replace(/[+]\s*$/, '').replace(/^(\s*address\s*[:.\-]*\s*)+/i, '').replace(/[|_~]+/g, ' ').replace(/\s+/g, ' ').replace(/^[\s,.:;\-]+|[\s;\-]+$/g, '').trim();
   const skip = (l) => /\b(dob|date of birth|male|female|vid|aadhaar|government of india|unique identification|enrol\w*|mobile|help@|1947|www\.)\b/i.test(l);
   const pinEnd = (from, max) => {
     for (let i = from; i < Math.min(lines.length, from + max); i++) if (pinRe.test(lines[i])) return i;
@@ -242,6 +254,10 @@ function findAddress(lines) {
   if (start >= 0) {
     end = pinEnd(start, 8);
     if (end < 0) end = Math.min(lines.length - 1, start + 3);
+    // Stop before the next labelled line (phone, e-mail, date of birth …).
+    for (let i = start + 1; i <= end; i++) {
+      if (/^\W*(phone|mobile|tel|e-?mail|d\.?\s?o\.?\s?b|ppo|nominee|pan|cif)\b/i.test(lines[i])) { end = i - 1; break; }
+    }
   } else {
     // Aadhaar letter: "To" (or "To, Name") followed by name and address down to the PIN code.
     const toIdx = lines.findIndex((l) => /^\s*to\b[\s,:.]*([A-Za-z][A-Za-z .']{2,40})?\s*$/i.test(l));
@@ -337,7 +353,9 @@ export function extractDetails(rawText) {
     const c = m[1] + toDigits(m[2]).padEnd(4, '?') + m[3];
     if (/^[A-Z]{3}[PCHABGJLFT][A-Z][0-9]{4}[A-Z]$/.test(c)) { pan = c; break; }
   }
-  const isPan = !!pan && (/INCOME\s*TAX|PERMANENT\s*ACCOUNT/.test(upper) || !isPassport);
+  const bankScore = BANK_MARKERS.filter((re) => re.test(upper)).length;
+  const looksBank = bankScore >= 3 && !/INCOME\s*TAX\s*DEPARTMENT/.test(upper);
+  const isPan = !!pan && !looksBank && (/INCOME\s*TAX|PERMANENT\s*ACCOUNT/.test(upper) || !isPassport);
   if (pan) add('PAN', pan);
 
   // ----- Aadhaar -----
@@ -387,11 +405,23 @@ export function extractDetails(rawText) {
   // ----- Bank -----
   const ifsc = findIfsc(text);
   let bank = ifsc ? BANKS[ifsc.slice(0, 4)] : null;
+  let bankCode = ifsc ? ifsc.slice(0, 4) : null;
   if (!bank) {
     const named = BANK_NAMES.find((b) => b.re.test(text));
-    if (named) bank = [named.short, named.long];
+    if (named) { bank = [named.short, named.long]; bankCode = Object.keys(BANKS).find((k) => BANKS[k][1] === named.long); }
   }
-  const isBank = !!ifsc || (!!bank && /(A\/C|ACCOUNT|PASSBOOK|BRANCH|CIF|CUSTOMER)/.test(upper));
+  // Branch e-mail such as sbi.04815@sbi.co.in names the bank, and for SBI the branch code.
+  const mail = text.toLowerCase().replace(/\s+/g, '').match(/([a-z]*)\.?([0-9]{3,6})?@([a-z.]+\.(?:co\.in|com|in|bank))/g) || [];
+  let mailBranch = null;
+  for (const m of mail) {
+    const dom = m.split('@')[1];
+    const code = BANK_DOMAINS[dom];
+    if (!code) continue;
+    if (!bank) { bank = BANKS[code]; bankCode = code; }
+    const bc = m.split('@')[0].match(/([0-9]{3,6})$/);
+    if (bc && code === bankCode) mailBranch = bc[1];
+  }
+  const isBank = !!ifsc || looksBank || (!!bank && /(A\/C|ACCOUNT|PASSBOOK|BRANCH|CIF|CUSTOMER)/.test(upper));
   if (isBank) {
     if (bank) add('Bank', bank[1]);
     // "A/c No." is often misread ("Jc No.", "/c No", "AIC No"), so accept any short prefix before "c No".
@@ -411,23 +441,37 @@ export function extractDetails(rawText) {
       add('Account number', acctDigits);
     }
     if (ifsc) add('IFSC', ifsc);
+    else if (bankCode === 'SBIN' && mailBranch) {
+      // SBI codes are SBIN0 followed by the six-digit branch code; read here from the branch e-mail.
+      add('IFSC', 'SBIN0' + mailBranch.padStart(6, '0'), false);
+    }
     const cif = labelled(lines, /(cif|customer\s*(id|no|number)|cust\.?\s*id)\s*(no|number)?\s*\.?\s*[:\-#]?/i, /([0-9OIl][0-9OIl ]{5,16}[0-9OIl])/);
     if (cif && toDigits(cif) !== acctDigits) add('Customer ID (CIF)', toDigits(cif));
     const micr = labelled(lines, /micr\s*(code|no)?\s*\.?\s*[:\-]?/i, /([0-9OIl]{9})/);
     if (micr) add('MICR', toDigits(micr));
     const branch = labelled(lines, /\b[bg]?ranch\b(?!\s*code)\s*(name)?\s*[:\-]?/i, /([A-Za-z][A-Za-z0-9 ,.&()\-']{2,60})/);
-    if (branch) add('Branch', titleCase(branch.replace(/\b\w?ranch\s*code.*$/i, '').replace(/\b(ifsc|micr).*$/i, '')), false);
+    if (branch) add('Branch', titleCase(branch.replace(/\b\w?ranch\s*code.*$/i, '').replace(/\s+(cod|code|ifsc|micr|buss|phone)\b.*$/i, '').replace(/\b(ifsc|micr).*$/i, '').trim()), false);
     const bcode = labelled(lines, /branch\s*code\s*[:\-]?/i, /([0-9OIl]{3,6})/);
     if (bcode) add('Branch code', toDigits(bcode), false);
+    else if (mailBranch) add('Branch code', mailBranch, false);
     let holder = labelled(lines, /(account\s*holder|a\/c\s*holder|customer\s*name|name\s*of\s*(the\s*)?customer|^\s*name)\s*(\(s\))?\s*[:\-]/i, /([A-Za-z][A-Za-z .']{2,50})/);
     if (!holder) {
       const l = lines.find((x) => /\bname\s*[:\-]/i.test(x) && !/(branch|bank|father|nominee|mother|spouse)\s*name/i.test(x));
       if (l) { const m = l.slice(l.search(/\bname\s*[:\-]/i)).match(/name\s*[:\-]\s*([A-Za-z][A-Za-z .']{2,50})/i); if (m) holder = m[1]; }
     }
+    if (holder) {
+      holder = holder.replace(/\b(micr|ifsc|cif|a\/c|account|branch\s*code|mop)\b.*$/i, '').trim();
+      // Printed names are in capitals; drop trailing misread words that are not.
+      const words = holder.split(/\s+/);
+      if (words.filter((w) => /^[A-Z.]+$/.test(w)).length >= 2) {
+        const cut = words.findIndex((w, i) => i > 1 && !/^[A-Z.]+$/.test(w));
+        if (cut > 0) holder = words.slice(0, cut).join(' ');
+      }
+    }
     if (holder && !/branch|bank/i.test(holder)) add('Account holder', titleCase(holder.replace(/^\s*(mr|mrs|ms|miss|shri|smt|sri|dr)\.?\s+/i, '')), false);
     const type = /\bCURRENT\s+(A\/?C|ACCOUNT)\b/.test(upper) ? 'Current' : /\b(SAVINGS?|SB\s*A\/?C|S\.B\.)\b/.test(upper) ? 'Savings' : null;
     if (type) add('Account type', type, false);
-    const opened = labelled(lines, /(date\s*of\s*opening|opening\s*date|a\/c\s*open(ing)?\s*date)/i, /(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}|\d{1,2}\s*[A-Za-z]{3,9}\s*\d{4})/);
+    const opened = labelled(lines, /(date\s*of\s*opening|opening\s*(date|dt)|a\/c\s*open(ing)?\s*(date|dt))\s*\.?\s*[:\-]?/i, /(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}|\d{1,2}\s*[A-Za-z]{3,9}\s*\d{4})/);
     if (opened) add('Date of opening', parseDateToken(opened), false);
     const nominee = labelled(lines, /nominee\s*(name)?\s*[:\-]/i, /([A-Za-z][A-Za-z .']{2,40})/);
     if (nominee) add('Nominee', titleCase(nominee), false);
