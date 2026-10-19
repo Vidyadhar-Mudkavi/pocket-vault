@@ -108,7 +108,56 @@ export async function preparePage(jpegBytes, watermark) {
 // ---------- minimal PDF writer (JPEG pages) ----------
 
 // pages: [{ bytes: Uint8Array (baseline JPEG, RGB), width, height }]
-export function buildPdf(pages, title = 'Document') {
+// PDF text uses the built-in Helvetica (no font embedded), which covers plain
+// Latin letters; accents are dropped and other characters become "?".
+function pdfText(s) {
+  const plain = String(s).replace(/₹/g, 'Rs.').replace(/·/g, '-').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[–—]/g, '-')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '');
+  return '(' + plain.replace(/[\\()]/g, (c) => '\\' + c).replace(/[^\x20-\x7e]/g, '?') + ')';
+}
+
+// Split text into lines no wider than maxWidth points (Helvetica, approximate widths).
+function wrapText(text, size, maxWidth) {
+  const avg = (ch) => (/[il.,:;'|!]/.test(ch) ? 0.28 : /[mwMW@]/.test(ch) ? 0.85 : /[A-Z0-9]/.test(ch) ? 0.64 : 0.52);
+  const width = (t) => [...t].reduce((a, c) => a + avg(c), 0) * size;
+  const out = [];
+  for (const para of String(text).split('\n')) {
+    let line = '';
+    for (const word of para.split(/\s+/).filter(Boolean)) {
+      const trial = line ? line + ' ' + word : word;
+      if (width(trial) <= maxWidth || !line) line = trial;
+      else { out.push(line); line = word; }
+    }
+    out.push(line);
+  }
+  return out;
+}
+
+// A text page listing details: { title, fields: [{label, value}], footer }.
+function detailsPageContent(details) {
+  const W = 595, H = 842, L = 56, R = 56, maxW = W - L - R;
+  const ops = ['BT'];
+  let y = H - 72;
+  const line = (font, size, text, x = L, grey = 0) => {
+    ops.push(`${grey} g /${font} ${size} Tf 1 0 0 1 ${x} ${y.toFixed(1)} Tm ${pdfText(text)} Tj`);
+  };
+  for (const t of wrapText(details.title || 'Details', 20, maxW)) { line('F2', 20, t); y -= 26; }
+  y -= 4;
+  if (details.footer) { line('F1', 9, details.footer, L, 0.4); y -= 26; }
+  for (const f of details.fields) {
+    if (y < 80) break;
+    line('F1', 9.5, (f.label || 'Detail').toUpperCase(), L, 0.4);
+    y -= 17;
+    for (const t of wrapText(f.value, 14, maxW)) { if (y < 60) break; line('F2', 14, t); y -= 18; }
+    y -= 12;
+  }
+  ops.push('ET');
+  return { width: W, height: H, content: ops.join('\n') + '\n' };
+}
+
+// pages: [{bytes (JPEG), width, height}]; details (optional) adds a first page
+// that lists them as real, selectable text.
+export function buildPdf(pages, title = 'Document', details = null) {
   const chunks = [];
   const offsets = [];
   let length = 0;
@@ -119,14 +168,16 @@ export function buildPdf(pages, title = 'Document') {
   };
   const startObj = (n) => { offsets[n] = length; push(`${n} 0 obj\n`); };
 
-  const pdfString = (s) => '(' + String(s).replace(/[\\()]/g, (c) => '\\' + c).replace(/[^\x20-\x7e]/g, '?') + ')';
-
-  // Object numbers: 1 catalog, 2 pages, 3 info, then 3 per page.
+  // Objects: 1 catalog, 2 pages, 3 info, 4 Helvetica, 5 Helvetica-Bold,
+  // then (if details) 2 for the text page, then 3 per image page.
+  const textPage = details && details.fields && details.fields.length ? detailsPageContent(details) : null;
+  const first = 6 + (textPage ? 2 : 0);
   const n = pages.length;
-  const pageObj = (i) => 4 + i * 3;
-  const contentObj = (i) => 5 + i * 3;
-  const imageObj = (i) => 6 + i * 3;
-  const total = 3 + n * 3;
+  const pageObj = (i) => first + i * 3;
+  const contentObj = (i) => first + 1 + i * 3;
+  const imageObj = (i) => first + 2 + i * 3;
+  const total = first - 1 + n * 3;
+  const kids = (textPage ? ['6 0 R'] : []).concat(pages.map((_, i) => `${pageObj(i)} 0 R`));
 
   push('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n');
 
@@ -134,10 +185,22 @@ export function buildPdf(pages, title = 'Document') {
   push('<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
 
   startObj(2);
-  push(`<< /Type /Pages /Count ${n} /Kids [${pages.map((_, i) => `${pageObj(i)} 0 R`).join(' ')}] >>\nendobj\n`);
+  push(`<< /Type /Pages /Count ${kids.length} /Kids [${kids.join(' ')}] >>\nendobj\n`);
 
   startObj(3);
-  push(`<< /Title ${pdfString(title)} /Producer (Pocket Vault) >>\nendobj\n`);
+  push(`<< /Title ${pdfText(title)} /Producer (Pocket Vault) >>\nendobj\n`);
+
+  startObj(4);
+  push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n');
+  startObj(5);
+  push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>\nendobj\n');
+
+  if (textPage) {
+    startObj(6);
+    push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${textPage.width} ${textPage.height}] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 7 0 R >>\nendobj\n`);
+    startObj(7);
+    push(`<< /Length ${te.encode(textPage.content).length} >>\nstream\n${textPage.content}endstream\nendobj\n`);
+  }
 
   pages.forEach((p, i) => {
     // Page size: long edge 842 pt (A4 long side), aspect preserved.

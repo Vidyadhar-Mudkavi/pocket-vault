@@ -6,7 +6,7 @@ import * as share from './share.js';
 import { extractDetails } from './extract.js';
 import * as ocr from './ocr.js';
 
-export const APP_VERSION = '1.2.5';
+export const APP_VERSION = '1.2.6';
 const AUTO_LOCK_MS = 5 * 60 * 1000;   // lock after 5 minutes without a touch or key
 const HIDDEN_LOCK_MS = 60 * 1000;     // lock if the app was in the background over a minute
 const DAY = 86400000;
@@ -1060,6 +1060,11 @@ function refreshShareForm() {
   const wmOn = $('share-wm-on').checked;
   $('share-wm-fields').hidden = !wmOn;
   $('share-wm-preview').textContent = wmOn ? `Stamp: “${watermarkText()}”` : '';
+  $('share-fields-hint').textContent = secure
+    ? 'Ticked details go inside the package.'
+    : !pagesOn ? 'Ticked details are sent as a text message.'
+      : shareFormat() === 'pdf' ? 'Ticked details are printed on the first page of the PDF.'
+        : 'Ticked details travel as text: after sending, tap Copy details and paste them into the same chat.';
   const anyAadhaar = (sh.item.fields || []).some((f) => f.value && share.looksLikeAadhaar(f));
   $('share-mask-row').hidden = !anyAadhaar;
   $('share-note').textContent = secure
@@ -1139,16 +1144,22 @@ async function prepareShare() {
         originals.forEach((o) => prepared.files.push(new File([o.bytes], o.name, { type: o.type })));
       } else if (pages.length) {
         if (shareFormat() === 'pdf') {
-          const pdf = share.buildPdf(pages, item.title);
+          const details = outFields.length
+            ? { title: item.title, fields: outFields, footer: `Shared from Pocket Vault · ${share.todayLabel()}` }
+            : null;
+          const pdf = share.buildPdf(pages, item.title, details);
           prepared.files.push(new File([pdf], `${base}.pdf`, { type: 'application/pdf' }));
         } else {
           pages.forEach((p, i) => prepared.files.push(new File([p.bytes], `${base}${pages.length > 1 ? '-' + (i + 1) : ''}.jpg`, { type: 'image/jpeg' })));
         }
       }
       const size = prepared.files.reduce((a, f) => a + f.size, 0);
+      const inPdf = text && pages.length && shareFormat() === 'pdf';
       prepared.label = prepared.files.length
-        ? `Ready: ${prepared.files.length} file${prepared.files.length > 1 ? 's' : ''} (${(size / 1048576).toFixed(1)} MB).${text ? ' Send it, then use Copy details and paste them into the same chat.' : ''}`
-        : 'Details ready as text.';
+        ? `Ready: ${prepared.files.length} file${prepared.files.length > 1 ? 's' : ''} (${(size / 1048576).toFixed(1)} MB).`
+          + (inPdf ? ` The ${fields.length} ticked detail${fields.length > 1 ? 's are' : ' is'} on the first page.`
+            : text ? ' Send it, then use Copy details and paste them into the same chat.' : '')
+        : `Ready: ${fields.length} detail${fields.length > 1 ? 's' : ''} as a text message.`;
     }
     sh.prepared = prepared;
     $('share-ready-text').textContent = prepared.label;
